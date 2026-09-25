@@ -135,7 +135,7 @@ OUTDIR=$4
 
 echo "Step 3: Make allele freq of ${OGNAME}..."
 # Use awk to build a hash of ref positions and merge with outgroup bases
-awk -v OFS=',' '
+awk -v OFS='\t' '
     # Load outgroup file first (NR==FNR reads first file)
     NR==FNR { 
         og[$1] = $2 #   Store a hash: og[chrom:pos] = base
@@ -145,11 +145,20 @@ awk -v OFS=',' '
     {
         key = $1":"$2          # Build a lookup key from ref: "chrom:pos"e.g. "1:1118"
         base = og[key]         # look up outgroup base
-        if (base == "A")      print 1,0,0,0
-        else if (base == "C") print 0,1,0,0
-        else if (base == "G") print 0,0,1,0
-        else if (base == "T") print 0,0,0,1
-        else                  print 0,0,0,0   # missing in outgroup
+        
+        if (base == "A")      acgt = "1,0,0,0"
+            else if (base == "C") acgt = "0,1,0,0"
+            else if (base == "G") acgt = "0,0,1,0"
+            else if (base == "T") acgt = "0,0,0,1"
+            else { base = "NA"; acgt = "0,0,0,0" }
+
+            ogcoord = (key in og_pos) ? og_pos[key] : "NA"
+
+            # Columns:
+            # 1 chrom_ref  2 pos_ref  3 base_ref
+            # 4 og_coord   5 og_base
+            # 6 focal-style ACGT vector (outgroup)
+            print $1, $2, $3, ogcoord, base, acgt
     }
 ' $OG_FILE $REF_FILE > $OUTDIR/allele_count_$OGNAME.txt
 
@@ -296,10 +305,10 @@ setup_dir
 #get_OG_bases $RESULT1/snps_Obrth.bed $BARTHII Obrth $RESULT1
 #get_OG_bases $RESULT1/snps_Oglmptl.bed $GLAMPTL Oglmptl $RESULT1
 #sfs_OG $RESULT1/snps_IRGSP.tsv $RESULT1/snps_Obrth.tsv Obrth $RESULT1
-#sfs_OG $RESULT1/snps_IRGSP.tsv $RESULT1/snps_Oglmptl.tsv Oglmptl $RESULT1
+sfs_OG $RESULT1/snps_IRGSP.tsv $RESULT1/snps_Oglmptl.tsv Oglmptl $RESULT1
 
 #GENERATE EST-SFS INPUT FILES
-count_allele $VCF_ALL $RESULT1 19k_samples
+#count_allele $VCF_ALL $RESULT1 19k_samples
 
 #RUN EST-SFS
 #run_est_sfs $RESULT1/estsfs_data.chr1.tsv $R6 $RESULT1 chr1

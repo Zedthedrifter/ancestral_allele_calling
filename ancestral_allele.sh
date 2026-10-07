@@ -30,8 +30,8 @@ REF=$1        # reference fasta (rufipogon.fa)
 OG1=$2        # outgroup1 assembly fasta (barthii)
 OG2=$3        # outgroup2 assembly fasta (glamaepatula)
 OUTDIR=$4     # output directory
-NAME1=$5      # short name for OG1 (e.g. W1943) - no spaces/special chars
-NAME2=$6      # short name for OG2 (e.g. W1715)
+NAME1=$5      # short name for OG1 (e.g. Obrthii) - no spaces/special chars
+NAME2=$6      # short name for OG2 (e.g. Oglmptl)
 REFNAME=$7    # short name for reference (e.g. sativa)
 
 source $HOME/miniforge3/bin/activate cactus-env 
@@ -220,6 +220,35 @@ python3 prep_estsfs.py \
 cat $OUTDIR/allele_count.${NAME}.tsv|cut -f 7- > $OUTDIR/estsfs_data.${NAME}.txt
 }
 
+function filter_est-sfs_inputs {
+
+#FILTER: MAKE SURE THE SITES ARE IN SAME ORDER FOR EST-SFS
+awk -F'\t' 'NR==FNR { keep[$1":"$2]=1; next } ($1":"$2) in keep' \
+allele_count.19k_samples.tsv allele_count_Obrth.txt > allele_count_filtered_Obrth.txt
+awk -F'\t' 'NR==FNR { keep[$1":"$2]=1; next } ($1":"$2) in keep' \
+allele_count.19k_samples.tsv allele_count_Oglmptl.txt > allele_count_filtered_Oglmptl.txt
+
+#COMPILE: IN EST-SFS INPUT FORMAT
+
+}
+
+function compile_est-sfs_inputs {
+
+FOCAL=$1
+OG1=$2
+OG2=$3
+OUTDIR=$4
+
+echo "USING ENV" $CONDA_DEFAULT_ENV
+echo "COMPILING INPUT ALLELE COUNT FILES"
+
+cat $FOCAL|grep -v 'ChrUN'|cut -f 7 > $OUTDIR/tmp1.tsv
+cut -f 6 $OG1 > $OUTDIR/tmp2.tsv
+cut -f 6 $OG2 > $OUTDIR/tmp3.tsv
+wc -l $OUTDIR/tmp*
+paste $OUTDIR/tmp1.tsv $OUTDIR/tmp2.tsv $OUTDIR/tmp3.tsv > $OUTDIR/est_sfs_input.tsv
+rm -f $OUTDIR/tmp*
+}
 
 function run_est_sfs {
 
@@ -234,6 +263,77 @@ echo "USING ENV" $CONDA_DEFAULT_ENV
 est-sfs $CONFIG $DATA seedfile.txt \
         ${OUTDIR}/${NAME}_sfs_out.txt \
         ${OUTDIR}/${NAME}_pvalue_out.txt
+
+}
+
+#RUN IN BATCH TO AVOID MEMORY ISSUE
+function run_est_sfs_chunked {
+
+DATA=$1        # full est-sfs input file
+CONFIG=$2      # config file (e.g. config_r6.txt)
+OUTDIR=$3      # output directory
+NAME=$4        # prefix for output names (e.g. rice)
+CHUNK=$5       # lines per chunk (default: 2000000)
+
+# Default chunk size if not provided
+CHUNK=${CHUNK:-2000000}
+
+source $HOME/miniforge3/bin/activate est-sfs
+echo "USING ENV" $CONDA_DEFAULT_ENV
+
+# Create a working directory for chunks
+CHUNKDIR=$OUTDIR/chunks_${NAME}
+mkdir -p $CHUNKDIR
+LOG=$CHUNKDIR/errors.log
+
+echo "Splitting $DATA into chunks of $CHUNK lines..."
+split -l $CHUNK "$DATA" "${CHUNKDIR}/chunk_"
+
+# Loop over each chunk
+for chunk in ${CHUNKDIR}/chunk_*; do
+    # Extract chunk number (e.g. chunk_00.txt -> 00)
+    chunk_id=$(basename "$chunk" | sed 's/chunk_//')
+    
+    echo "Running est-sfs on chunk ${chunk_id}..."
+    
+    est-sfs $CONFIG $chunk seedfile.txt \
+        ${CHUNKDIR}/${NAME}_sfs_out_${chunk_id}.txt \
+        ${CHUNKDIR}/${NAME}_pvalue_out_${chunk_id}.txt
+    
+    if [ $? -ne 0 ]; then
+        echo "ERROR: est-sfs failed on chunk ${chunk_id}"
+        echo "ERROR: est-sfs failed on chunk ${chunk_id}" >> $LOG
+    fi
+done
+
+echo "All chunks completed. Outputs in ${CHUNKDIR}/"
+
+# Optional: concatenate all outputs into one file
+echo "Concatenating outputs..."
+for f in ${CHUNKDIR}/${NAME}_sfs_out_*.txt; do
+    tr -d '\n' < "$f"
+    printf ','
+done > ${OUTDIR}/${NAME}_sfs_out_all.txt
+#manually remove the last comma...
+
+# PVALUE: strip first 8 header lines from each chunk, then concatenate
+# (only keep the header from the FIRST chunk)
+first=1
+for f in ${CHUNKDIR}/${NAME}_pvalue_out_*.txt; do
+    if [ $first -eq 1 ]; then
+        cat "$f" >> ${OUTDIR}/${NAME}_pvalue_out_all.txt
+        first=0
+    else
+        tail -n +9 "$f" >> ${OUTDIR}/${NAME}_pvalue_out_all.txt
+    fi
+done
+
+echo "Done. Combined outputs:"
+echo "  ${OUTDIR}/${NAME}_sfs_out_all.txt"
+echo "  ${OUTDIR}/${NAME}_pvalue_out_all.txt"
+
+# Optional: clean up chunks (uncomment to enable)
+# rm -rf ${CHUNKDIR}
 
 }
 
@@ -261,10 +361,11 @@ SAMPLE=/Users/zchen13/data/oryza_19K_RGP
 IRGSP=/Users/zchen13/data/reference/IRGSP-1.0_chr.renamed.fa
 BARTHII=/Users/zchen13/data/reference/O_barthii.chr.fa
 GLAMPTL=/Users/zchen13/data/reference/O_glamaepatula.chr.fa
+MRDONLS=/Users/zchen13/data/reference/O_meridionalis.chr.fa
 WORKDIR=/Users/zchen13/SCRATCH/ancestral_allele
 #
 RESULT1=$WORKDIR/01_est-sfs
-RESULT2=$WORKDIR/02_
+RESULT2=$WORKDIR/02_est-sfs
 
 #OUTPUT SHORTCUTS
 VCF_ALL=$RESULT1/genome1.focal.chr1-12.vcf.gz
@@ -280,7 +381,7 @@ function setup_dir {
 
 mkdir -p $WORKDIR
 mkdir -p $RESULT1
-#mkdir -p $RESULT2
+mkdir -p $RESULT2
 #mkdir -p $RESULT3
 #mkdir -p $RESULT5
 #mkdir -p $RESULT5
@@ -297,22 +398,39 @@ setup_dir
 #WGA WITH CACTUS FOR OUTLIER ALLELE EXTRACTION
 #run_repeatmasker $GLAMPTL
 #run_cactus $IRGSP $BARTHII $GLAMPTL $RESULT1 Obrth Oglmptl Ostv
+#run_cactus $IRGSP $BARTHII $MRDONLS $RESULT2 Obrth Omrdonls Ostv
 
 #OUTGROUP ALLELE EXTRACTION
 #get_vcf_coordinates $VCF_ALL $RESULT1
 #get_hal_coordinates $RESULT1/rice_wga.hal $RESULT1/ref_snps.bed Ostv Obrth $RESULT1
-#get_hal_coordinates $RESULT1/rice_wga.hal $RESULT1/ref_snps.bed Ostv Oglmptl $RESULT1  
+#get_hal_coordinates $RESULT1/rice_wga.hal $RESULT1/ref_snps.bed Ostv Oglmptl $RESULT1
+#get_hal_coordinates $RESULT2/rice_wga.hal $RESULT1/ref_snps.bed Ostv Omrdonls $RESULT2   
 #get_OG_bases $RESULT1/snps_Obrth.bed $BARTHII Obrth $RESULT1
 #get_OG_bases $RESULT1/snps_Oglmptl.bed $GLAMPTL Oglmptl $RESULT1
+#get_OG_bases $RESULT2/snps_Omrdonls.bed $MRDONLS Omrdonls $RESULT2
 #sfs_OG $RESULT1/snps_IRGSP.tsv $RESULT1/snps_Obrth.tsv Obrth $RESULT1
-sfs_OG $RESULT1/snps_IRGSP.tsv $RESULT1/snps_Oglmptl.tsv Oglmptl $RESULT1
+#sfs_OG $RESULT1/snps_IRGSP.tsv $RESULT1/snps_Oglmptl.tsv Oglmptl $RESULT1
+#sfs_OG $RESULT1/snps_IRGSP.tsv $RESULT2/snps_Omrdonls.tsv Omrdonls $RESULT2
 
-#GENERATE EST-SFS INPUT FILES
+#GENERATE EST-SFS INPUT FILE: SAMPLE
 #count_allele $VCF_ALL $RESULT1 19k_samples
+#TRIM THE OG FILES (CAUSE SOME OF THE SITES WERE FILTERED OUT IN THE 19K FILE DUE TO EXCESSIVE MISSING DATA)
+
+#COMPILE
+#compile_est-sfs_inputs $RESULT1/allele_count.19k_samples.tsv $RESULT1/allele_count_filtered_Obrth.txt $RESULT1/allele_count_filtered_Oglmptl.txt $RESULT1
+#FILTER THE INPUTS TO MAKE SURE THE NUMBER OF SITES ARE THE SAME
+#need to add this command to function later
+#awk -F'\t' 'NR==FNR { keep[$1":"$2]=1; next } ($1":"$2) in keep' \
+#    $RESULT1/allele_count.19k_samples.tsv $RESULT2/allele_count_Omrdonls.txt > $RESULT2/allele_count_filtered_Omrdonls.txt
+#compile_est-sfs_inputs $RESULT1/allele_count.19k_samples.tsv $RESULT1/allele_count_filtered_Obrth.txt $RESULT2/allele_count_filtered_Omrdonls.txt $RESULT2
 
 #RUN EST-SFS
 #run_est_sfs $RESULT1/estsfs_data.chr1.tsv $R6 $RESULT1 chr1
-#run_est_sfs chr1_first100.tsv $R6 $RESULT1 chr1
+#run_est_sfs $RESULT1/chr1_first100.tsv $R6 $RESULT1 chr1_test
+#run_est_sfs_chunked $RESULT1/est_sfs_input.tsv $R6 $RESULT1 rice_chr1-12_est-sfs 200000
+run_est_sfs_chunked $RESULT2/est_sfs_input.tsv $R6 $RESULT2 rice_chr1-12_est-sfs 200000
+
+#RUN ANCIFY
 }
 
 

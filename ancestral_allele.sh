@@ -337,6 +337,113 @@ echo "  ${OUTDIR}/${NAME}_pvalue_out_all.txt"
 
 }
 
+function extract_ancestral_allele {
+
+THRESHOLD1=$1    # certainty for max_p (base identity)
+THRESHOLD2=$2    # certainty for P-major-ancestral
+PVALUE=$3        # est-sfs pvalue output
+ALLELECOUNT=$4   # allele count file (focal, og1, og2)
+OUTDIR=$5
+OUTFILE=$6
+
+echo "USING ENV" $CONDA_DEFAULT_ENV "to extract ancestral allele"
+echo "THRESHOLD1 (max_p) =" $THRESHOLD1
+echo "THRESHOLD2 (major_p) =" $THRESHOLD2
+
+# ---- 1. Strip header lines from the pvalue file ----
+PVALUE_DATA=${OUTDIR}/pvalue_data.tmp
+awk '!/^0 /' $PVALUE > $PVALUE_DATA
+
+# ---- 2. Confirm line counts match ----
+N_PVALUE=$(wc -l < $PVALUE_DATA)
+N_ALLELECOUNT=$(wc -l < $ALLELECOUNT)
+
+if [ "$N_PVALUE" -ne "$N_ALLELECOUNT" ]; then
+    echo "ERROR: line count mismatch"
+    echo "  pvalue data lines:    $N_PVALUE"
+    echo "  allele count lines:   $N_ALLELECOUNT"
+    rm -f $PVALUE_DATA
+    return 1
+fi
+
+echo "Line counts match: $N_PVALUE sites"
+
+# ---- 3. Paste the two files side by side ----
+JOINED=${OUTDIR}/joined.tmp
+paste $ALLELECOUNT $PVALUE_DATA > $JOINED
+echo "computing ancestral allele"
+# ---- 4. Parse the joined file in a single pass ----
+awk -v THRESHOLD1="$THRESHOLD1" -v THRESHOLD2="$THRESHOLD2" '
+    {
+        # --- Fields from allele count file (columns 1-3) ---
+        chr          = $1
+        site         = $2
+        focal_counts = $3
+        og1          = $4
+        og2          = $5
+
+        # --- Fields from pvalue file (columns 6-12) ---
+        xxxx  = $6
+        code  = $7
+        p_maj = $8
+        p_A   = $9
+        p_C   = $10
+        p_G   = $11
+        p_T   = $12
+
+        # --- Focal counts from the comma-delimited string ---
+        split(focal_counts, f, ",")
+        fa = f[1]; fc = f[2]; fg = f[3]; ft = f[4]
+
+        # --- Most likely ancestral base from pvalue ---
+        max_p = p_A; anc = "A"
+        if (p_C > max_p) { max_p = p_C; anc = "C" }
+        if (p_G > max_p) { max_p = p_G; anc = "G" }
+        if (p_T > max_p) { max_p = p_T; anc = "T" }
+
+        # --- Major allele from focal counts ---
+        maj_p = fa; maj = "A"
+        if (fc > maj_p) { maj_p = fc; maj = "C" }
+        if (fg > maj_p) { maj_p = fg; maj = "G" }
+        if (ft > maj_p) { maj_p = ft; maj = "T" }
+
+        # --- Decision rule ---
+        if (max_p > THRESHOLD1) {
+            aa = anc
+        } else if (p_maj > THRESHOLD2) {
+            aa = maj
+        } else {
+            aa = "NA"
+        }
+
+        # --- Output ---
+        printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", \
+            chr, site, aa, maj, p_maj, \
+            p_A, p_C, p_G, p_T, \
+            focal_counts, og1, og2
+    }
+' $JOINED > ${OUTDIR}/${OUTFILE}
+
+# ---- 5. Clean up temporaries ----
+rm -f $PVALUE_DATA $JOINED
+
+echo "Output written to ${OUTDIR}/${OUTFILE}"
+}
+
+#PLOT uSFS
+
+function plot_uSFS {
+
+AA_FILE=$1
+NAME=$2
+OUTDIR=$3
+
+source $HOME/miniforge3/bin/activate est-sfs
+echo "USING ENV" $CONDA_DEFAULT_ENV
+
+python3 plot_uSFS.py $AA_FILE $NAME $OUTDIR
+}
+
 #MASKING
 function run_repeatmasker {
 
@@ -428,7 +535,15 @@ setup_dir
 #run_est_sfs $RESULT1/estsfs_data.chr1.tsv $R6 $RESULT1 chr1
 #run_est_sfs $RESULT1/chr1_first100.tsv $R6 $RESULT1 chr1_test
 #run_est_sfs_chunked $RESULT1/est_sfs_input.tsv $R6 $RESULT1 rice_chr1-12_est-sfs 200000
-run_est_sfs_chunked $RESULT2/est_sfs_input.tsv $R6 $RESULT2 rice_chr1-12_est-sfs 200000
+#run_est_sfs_chunked $RESULT2/est_sfs_input.tsv $R6 $RESULT2 rice_chr1-12_est-sfs 200000
+
+#EXTRACT AA
+#extract_ancestral_allele 0.95 0.85 $RESULT1/rice_chr1-12_est-sfs_pvalue_out_all.txt $RESULT1/allele_count_filtered_compiled.tsv $RESULT1 AA_Obrth-Oglmptl.tsv
+#extract_ancestral_allele 0.95 0.85 $RESULT2/rice_chr1-12_est-sfs_pvalue_out_all.txt $RESULT2/allele_count_filtered_compiled.tsv $RESULT2 AA_Obrth-mrdonls.tsv
+
+#PLOT usfs
+#plot_uSFS $RESULT1/AA_Obrth-Oglmptl.tsv og_set1 $RESULT1
+plot_uSFS $RESULT2/AA_Obrth-mrdonls.tsv  og_set2 $RESULT2
 
 #RUN ANCIFY
 }

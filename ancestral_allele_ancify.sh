@@ -1,7 +1,13 @@
 #!/bin/bash
 function set_up_env_ancify {
 
-conda create -n ancify-env -c conda-forge -c bioconda python=3.11 -y
+CONDA_SUBDIR=osx-64 conda create -y -n ancify-env python=3.9
+#activate env
+source $HOME/miniforge3/bin/activate ancify-env
+echo $CONDA_DEFAULT_ENV #double check the env is correct
+
+#permanently locks that particular Conda environment to only accept osx-64 (Intel) packages
+conda config --env --set subdir osx-64
 #install
 conda install -c bioconda lastz -n ancify-env -y
 conda install -c bioconda ucsc-axtchain -n ancify-env -y
@@ -12,6 +18,8 @@ conda install -c bioconda ucsc-nettoaxt -n ancify-env -y
 conda install -c bioconda ucsc-netsyntenic -n ancify-env -y
 conda install -c bioconda ucsc-netchainsubset -n ancify-env -y
 conda install -c bioconda ucsc-fatotwobit ucsc-twobitinfo -n ancify-env -y
+conda install -c bioconda ucsc-chainstitchid ucsc-maftoaxt -n ancify-env -y
+conda install -c bioconda bx-python -n ancify-env -y
 }
 
 #CONVERT FASTA TO 2BIT
@@ -55,8 +63,8 @@ hal2maf $HAL $OUTDIR/${NAME}.maf \
 function MAF_2_AXT {
 
 MAF=$1
-REF_NAME=$2
-QRY_NAME=$3
+T_NAME=$2
+Q_NAME=$3
 OUTDIR=$4
 
 source $HOME/miniforge3/bin/activate ancify-env
@@ -64,14 +72,15 @@ echo "USING ENV" $CONDA_DEFAULT_ENV
 
 echo "convert MAF to AXT: ${QRY_NAME}"
 
-maf_to_axt.py $REF_NAME $QRY_NAME <$MAF> $OUTDIR/${QRY_NAME}.axt
+#maftoaxt $MAF first $Q_NAME $OUTDIR/${Q_NAME}.axt
+maf_to_axt.py $T_NAME $Q_NAME <$MAF> $OUTDIR/${Q_NAME}.axt
 }
 
 #
 function AXT_2_Net_AXT {
 
-NAME=$1
-REF=$2
+Q=$1
+T=$2
 OUTDIR=$3
 
 source $HOME/miniforge3/bin/activate ancify-env
@@ -79,28 +88,33 @@ echo "USING ENV" $CONDA_DEFAULT_ENV
 
 echo "convert AXT 2 Net-AXT: ${NAME}"
 # 1. Convert AXT to Chain
-#axtChain -linearGap=medium $OUTDIR/${NAME}.axt $OUTDIR/${REF}.2bit $OUTDIR/${NAME}.2bit $OUTDIR/${NAME}.chain
+axtChain -linearGap=medium $OUTDIR/${Q}.axt $OUTDIR/${T}.2bit $OUTDIR/${Q}.2bit $OUTDIR/${Q}.chain
 
 # 2. Merge and sort chains
-#chainMergeSort $OUTDIR/${NAME}.chain > $OUTDIR/${NAME}.all.chain
+chainMergeSort $OUTDIR/${Q}.chain > $OUTDIR/${Q}.all.chain
 
 # 3. PreNet (removes chains with low coverage)
-#chainPreNet $OUTDIR/${NAME}.all.chain $OUTDIR/${REF}.sizes $OUTDIR/${NAME}.sizes $OUTDIR/${NAME}.preNet.chain
+chainPreNet $OUTDIR/${Q}.all.chain $OUTDIR/${T}.sizes $OUTDIR/${Q}.sizes $OUTDIR/${Q}.preNet.chain
 
-# 4. Create Net
-#chainNet $OUTDIR/${NAME}.preNet.chain $OUTDIR/${REF}.sizes $OUTDIR/${NAME}.sizes $OUTDIR/${REF}.net $OUTDIR/${NAME}.net
+# 4. Create Net: usage: chainNet in.chain target.sizes query.sizes target.net query.net
+#use output over the target genome
+chainNet $OUTDIR/${Q}.preNet.chain $OUTDIR/${T}.sizes $OUTDIR/${Q}.sizes $OUTDIR/${T}-${Q}.net $OUTDIR/${Q}.net
 
 # 5. Filter to Syntenic Nets
-#netSyntenic $OUTDIR/${NAME}.net $OUTDIR/${NAME}.syn.net
-#netChainSubset -skipMissing $OUTDIR/${NAME}.net $OUTDIR/${NAME}.preNet.chain $OUTDIR/${NAME}.net.chain
+#netSyntenic $OUTDIR/${T}-${Q}.net $OUTDIR/${T}-${Q}.syn.net #optional: syntex annotation
+netChainSubset $OUTDIR/${T}-${Q}.net $OUTDIR/${Q}.preNet.chain $OUTDIR/${T}-${Q}.net.chain
 
-# 6. Convert Net to AXT (The final file for ancify)
-netToAxt $OUTDIR/${NAME}.net $OUTDIR/${NAME}.preNet.chain  $OUTDIR/${NAME}.2bit $OUTDIR/${REF}.2bit $OUTDIR/${NAME}.net.axt
+# 6. Stitch duplicate chain IDs together
+#echo "STITCH DUPLICATE CHAIN IDs TOGETHER"
+chainStitchId $OUTDIR/${T}-${Q}.net.chain $OUTDIR/${T}-${Q}.net.stitched.chain
 
-# 7. Compress the final AXT
-#gzip $OUTDIR/${NAME}.net.axt
+# 7. Convert Net to AXT:  netToAxt in.net in.chain target.2bit query.2bit out.axt
+netToAxt $OUTDIR/${T}-${Q}.net $OUTDIR/${T}-${Q}.net.stitched.chain  $OUTDIR/${T}.2bit $OUTDIR/${Q}.2bit $OUTDIR/${T}-${Q}.net.axt
 
-#rm -f $OUTDIR/${NAME}.chain $OUTDIR/${NAME}.all.chain $OUTDIR/${NAME}.preNet.chain $OUTDIR/${NAME}.net $OUTDIR/${NAME}.net.chain $OUTDIR/${NAME}.syn.net
+# 8. Compress the final AXT
+gzip $OUTDIR/${T}-${Q}.net.axt
+
+rm -f $OUTDIR/${Q}.chain $OUTDIR/${Q}.all.chain $OUTDIR/${Q}.preNet.chain $OUTDIR/${T}-${Q}.net $OUTDIR/${Q}.net $OUTDIR/${T}-${Q}.net.chain ${T}-${Q}.net.stitched.chain $OUTDIR/${T}-${Q}.syn.net
 }
 #---------------------execute------------------------
 
@@ -117,6 +131,7 @@ WORKDIR=/Users/zchen13/SCRATCH/ancestral_allele
 RESULT1=$WORKDIR/01_est-sfs
 RESULT2=$WORKDIR/02_est-sfs
 RESULT3=$WORKDIR/03_ancify #AA INFERENCE USING ANCIFY
+
 
 #OUTPUT SHORTCUTS
 VCF_ALL=$RESULT1/genome1.focal.chr1-12.vcf.gz
@@ -141,7 +156,7 @@ mkdir -p $RESULT3
 setup_dir
 
 #CONVERT FA --> 2BIT
-convert_fa_to_2bit $IRGSP IRGSP $RESULT3 
+#convert_fa_to_2bit $IRGSP IRGSP $RESULT3 
 #convert_fa_to_2bit $BARTHII Obrth $RESULT3 
 #convert_fa_to_2bit $GLAMPTL Oglmptl $RESULT3 
 #convert_fa_to_2bit $MRDONLS Omrdonls $RESULT3 
@@ -154,10 +169,12 @@ convert_fa_to_2bit $IRGSP IRGSP $RESULT3
 #MAF 2 AXT
 #MAF_2_AXT $RESULT3/Obrth.maf    Ostv Obrth    $RESULT3
 #MAF_2_AXT $RESULT3/Oglmptl.maf  Ostv Oglmptl  $RESULT3
-#MAF_2_AXT $RESULT3/Omrdonls.maf Ostv Omrdonls $RESULT3
+MAF_2_AXT $RESULT3/Omrdonls.maf Ostv Omrdonls $RESULT3
 
 #AXT 2 NET AXT
 #AXT_2_Net_AXT Obrth IRGSP $RESULT3
+#AXT_2_Net_AXT Oglmptl IRGSP $RESULT3
+AXT_2_Net_AXT Omrdonls IRGSP $RESULT3
 
 #RUN ANCIFY333
 }

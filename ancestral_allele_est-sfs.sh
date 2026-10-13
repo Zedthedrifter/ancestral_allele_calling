@@ -10,7 +10,7 @@ echo $CONDA_DEFAULT_ENV #double check the env is correct
 #permanently locks that particular Conda environment to only accept osx-64 (Intel) packages
 conda config --env --set subdir osx-64
 #install
-conda install -c bioconda est-sfs repeatmasker -y
+conda install -c bioconda est-sfs plink2 -y
 conda install -c bioconda numpy bcftools bwa bedtools -y
 #MANUAL
 }

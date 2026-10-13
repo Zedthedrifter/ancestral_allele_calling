@@ -141,7 +141,7 @@ mkdir -p $RESULT3
 setup_dir
 
 #CONVERT FA --> 2BIT
-#convert_fa_to_2bit $IRGSP IRGSP $RESULT3 
+convert_fa_to_2bit $IRGSP IRGSP $RESULT3 
 #convert_fa_to_2bit $BARTHII Obrth $RESULT3 
 #convert_fa_to_2bit $GLAMPTL Oglmptl $RESULT3 
 #convert_fa_to_2bit $MRDONLS Omrdonls $RESULT3 
@@ -157,9 +157,9 @@ setup_dir
 #MAF_2_AXT $RESULT3/Omrdonls.maf Ostv Omrdonls $RESULT3
 
 #AXT 2 NET AXT
-AXT_2_Net_AXT Obrth IRGSP $RESULT3
+#AXT_2_Net_AXT Obrth IRGSP $RESULT3
 
-#RUN ANCIFY
+#RUN ANCIFY333
 }
 
 

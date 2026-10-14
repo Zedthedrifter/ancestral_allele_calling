@@ -116,6 +116,129 @@ gzip $OUTDIR/${T}-${Q}.net.axt
 
 rm -f $OUTDIR/${Q}.chain $OUTDIR/${Q}.all.chain $OUTDIR/${Q}.preNet.chain $OUTDIR/${T}-${Q}.net $OUTDIR/${Q}.net $OUTDIR/${T}-${Q}.net.chain ${T}-${Q}.net.stitched.chain $OUTDIR/${T}-${Q}.syn.net
 }
+
+#MAKE ancify config file
+function make_ancify_config {
+
+# ---- Positional arguments ----
+METHOD=$1           # voting, parsimony, likelyhood
+OUTDIR=$2           # where to save the config file/outputs
+FOCAL_NAME=$3       # focal species label (e.g. Ostv)
+CHROM_SIZES=$4      # path to chromosome sizes file
+shift 4             # remaining args are inner pairs, then "--outer", then outer pairs
+
+# ---- Parse remaining arguments ----
+INNER_PAIRS=()
+OUTER_PAIRS=()
+mode="inner"
+for arg in "$@"; do
+    if [ "$arg" = "--outer" ]; then
+        mode="outer"
+        continue
+    fi
+    if [ "$mode" = "inner" ]; then
+        INNER_PAIRS+=("$arg")
+    else
+        OUTER_PAIRS+=("$arg")
+    fi
+done
+
+# ---- Sanity checks ----
+if [ ${#INNER_PAIRS[@]} -eq 0 ]; then
+    echo "ERROR: no inner outgroups provided"
+    return 1
+fi
+if [ $((${#INNER_PAIRS[@]} % 2)) -ne 0 ]; then
+    echo "ERROR: inner outgroups must be provided as name/file pairs"
+    return 1
+fi
+if [ ${#OUTER_PAIRS[@]} -gt 0 ] && [ $((${#OUTER_PAIRS[@]} % 2)) -ne 0 ]; then
+    echo "ERROR: outer outgroups must be provided as name/file pairs"
+    return 1
+fi
+
+# ---- Write config ----
+mkdir -p $OUTDIR
+CONFIG=${OUTDIR}/config-ancify.yaml
+
+{
+    echo "focal_species: ${FOCAL_NAME}"
+    echo "chromosome_lengths: ${CHROM_SIZES}"
+    echo "outgroups:"
+
+    echo "  inner:"
+    for ((i=0; i<${#INNER_PAIRS[@]}; i+=2)); do
+        echo "    - name: ${INNER_PAIRS[$i]}"
+        echo "      alignment: ${INNER_PAIRS[$((i+1))]}"
+    done
+
+    if [ ${#OUTER_PAIRS[@]} -gt 0 ]; then
+        echo "  outer:"
+        for ((i=0; i<${#OUTER_PAIRS[@]}; i+=2)); do
+            echo "    - name: ${OUTER_PAIRS[$i]}"
+            echo "      alignment: ${OUTER_PAIRS[$((i+1))]}"
+        done
+    fi
+    echo "output_dir:  $OUTDIR"
+    echo "method:  $METHOD"
+
+    # ---- Build the Newick tree ----
+    # Structure: ((inner1,inner2,...),outer1,outer2,...)
+    # If only one inner outgroup: (inner1,outer1,outer2,...)
+    # If only one outer outgroup: ((inner1,inner2,...),outer1)
+
+    INNER_NAMES=()
+    for ((i=0; i<${#INNER_PAIRS[@]}; i+=2)); do
+        INNER_NAMES+=("${INNER_PAIRS[$i]}")
+    done
+
+    OUTER_NAMES=()
+    for ((i=0; i<${#OUTER_PAIRS[@]}; i+=2)); do
+        OUTER_NAMES+=("${OUTER_PAIRS[$i]}")
+    done
+
+    # Build the inner clade: (inner1,inner2,inner3)
+    INNER_CLADE="("
+    for ((i=0; i<${#INNER_NAMES[@]}; i++)); do
+        if [ $i -gt 0 ]; then INNER_CLADE+=","; fi
+        INNER_CLADE+="${INNER_NAMES[$i]}"
+    done
+    INNER_CLADE+=")"
+
+    # Build the full tree
+    if [ ${#OUTER_NAMES[@]} -eq 0 ]; then
+        TREE="${INNER_CLADE}"
+    elif [ ${#OUTER_NAMES[@]} -eq 1 ]; then
+        TREE="(${INNER_CLADE},${OUTER_NAMES[0]})"
+    else
+        TREE="(${INNER_CLADE}"
+        for ((i=0; i<${#OUTER_NAMES[@]}; i++)); do
+            TREE+=",${OUTER_NAMES[$i]}"
+        done
+        TREE+=")"
+    fi
+
+
+    echo "tree: ${TREE}"
+} > $CONFIG
+
+echo "Config written to ${CONFIG}"
+echo "----"
+cat $CONFIG
+}
+
+#RUN ANCIFY
+function run_ancify {
+
+CONFIG=$1
+#RUN ANCIFY
+source $HOME/miniforge3/bin/activate ancify-env
+echo "USING ENV" $CONDA_DEFAULT_ENV
+
+ancify project -c $CONFIG
+ancify call -c $CONFIG
+
+}
 #---------------------execute------------------------
 
 function main {  
@@ -165,18 +288,41 @@ setup_dir
 #hal_2_maf $RESULT1/rice_wga.hal Obrth $RESULT3
 #hal_2_maf $RESULT1/rice_wga.hal Oglmptl $RESULT3
 #hal_2_maf $RESULT2/rice_wga.hal Omrdonls $RESULT3
+#sed -E 's/(Omrdonls\.CM00[0-9]+)\.2/\1/g' Omrdonls.maf > Omrdonls.fixed.maf #fixing a naming issue
 
 #MAF 2 AXT
 #MAF_2_AXT $RESULT3/Obrth.maf    Ostv Obrth    $RESULT3
 #MAF_2_AXT $RESULT3/Oglmptl.maf  Ostv Oglmptl  $RESULT3
-MAF_2_AXT $RESULT3/Omrdonls.maf Ostv Omrdonls $RESULT3
+#MAF_2_AXT $RESULT3/Omrdonls.maf Ostv Omrdonls $RESULT3
 
 #AXT 2 NET AXT
 #AXT_2_Net_AXT Obrth IRGSP $RESULT3
 #AXT_2_Net_AXT Oglmptl IRGSP $RESULT3
-AXT_2_Net_AXT Omrdonls IRGSP $RESULT3
+#AXT_2_Net_AXT Omrdonls IRGSP $RESULT3
 
-#RUN ANCIFY333
+#MAKEke ANCIFY config AND RUN
+function ancify_config_run {
+
+METHOD=$1
+OUTDIR=$2
+    make_ancify_config \
+    $METHOD\
+    $OUTDIR/ancify_${METHOD} \
+    Ostv \
+    $RESULT3/IRGSP.sizes \
+    Obrth   $RESULT3/IRGSP-Obrth.net.axt.gz \
+    --outer \
+    Oglmptl $RESULT3/IRGSP-Oglmptl.net.axt.gz
+
+#RUN$OUTDIR/ancify_${METHOD} in the previous step
+run_ancify $OUTDIR/config-ancify.yaml
+}
+
+ancify_config_run voting $RESULT3
+#ancify_config_run parsimony $RESULT3
+#ancify_config_run likelihood $RESULT3
+
+
 }
 
 

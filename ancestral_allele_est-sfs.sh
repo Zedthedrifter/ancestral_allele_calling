@@ -11,7 +11,7 @@ echo $CONDA_DEFAULT_ENV #double check the env is correct
 conda config --env --set subdir osx-64
 #install
 conda install -c bioconda est-sfs plink2 -y
-conda install -c bioconda numpy bcftools bwa bedtools -y
+conda install -c bioconda numpy bcftools bwa bedtools matplotlib -y
 #MANUAL
 }
 
@@ -200,7 +200,8 @@ function count_allele {
 
 INFILE=$1
 OUTDIR=$2
-NAME=$3
+focalN=$3
+NAME=$4
 
 source $HOME/miniforge3/bin/activate est-sfs
 echo "USING ENV" $CONDA_DEFAULT_ENV
@@ -212,12 +213,14 @@ echo "CREATING est-sfs INPUT ALLELE COUNT FILES"
 python3 prep_estsfs.py \
     --infile $INFILE \
     --focalSampleList focal.txt \
-    --outfile $OUTDIR/allele_count.${NAME}.tsv \
-    --focalN 100 \
+    --outfile $OUTDIR/allele_count_${NAME}.tmp \
+    --focalN $focalN \
     --keepMono \
     --seed 42
 
-cat $OUTDIR/allele_count.${NAME}.tsv|cut -f 7- > $OUTDIR/estsfs_data.${NAME}.txt
+grep -v 'Chr' $OUTDIR/allele_count_${NAME}.tmp > $OUTDIR/allele_count_${NAME}.tsv
+#cat $OUTDIR/allele_count.${NAME}.tsv|cut -f 7- > $OUTDIR/estsfs_data.${NAME}.txt
+rm -f allele_count_19k_samples_2000.tmp
 }
 
 function filter_est-sfs_inputs {
@@ -346,6 +349,7 @@ ALLELECOUNT=$4   # allele count file (focal, og1, og2)
 OUTDIR=$5
 OUTFILE=$6
 
+source $HOME/miniforge3/bin/activate est-sfs
 echo "USING ENV" $CONDA_DEFAULT_ENV "to extract ancestral allele"
 echo "THRESHOLD1 (max_p) =" $THRESHOLD1
 echo "THRESHOLD2 (major_p) =" $THRESHOLD2
@@ -456,6 +460,18 @@ RepeatMasker $FASTA \
     -gff
 }
 
+#FILTER THE OG SITES TO MATCH FOCAL
+function filter_og_to_focal {
+
+focal_allele_count=$1
+OG_AC=$2
+OUTFILE=$3
+
+echo 'filtering OG sites to match focal sample sites'
+
+    awk -F'\t' 'NR==FNR { keep[$1":"$2]=1; next } ($1":"$2) in keep' \
+    $focal_allele_count $OG_AC > $OUTFILE
+}
 
 #---------------------execute------------------------
 
@@ -473,6 +489,9 @@ WORKDIR=/Users/zchen13/SCRATCH/ancestral_allele
 #
 RESULT1=$WORKDIR/01_est-sfs
 RESULT2=$WORKDIR/02_est-sfs
+RESULT4=$WORKDIR/04_est-sfs-2000
+RESULT5=$WORKDIR/05_est-sfs-20000
+
 
 #OUTPUT SHORTCUTS
 VCF_ALL=$RESULT1/genome1.focal.chr1-12.vcf.gz
@@ -489,9 +508,9 @@ function setup_dir {
 mkdir -p $WORKDIR
 mkdir -p $RESULT1
 mkdir -p $RESULT2
-#mkdir -p $RESULT3
-#mkdir -p $RESULT5
-#mkdir -p $RESULT5
+#mkdir -p $RESULT3 #ancify
+mkdir -p $RESULT4 #est-sfs sampling 2000
+mkdir -p $RESULT5 #est-sfs sampling 20000
 
 }
 setup_dir
@@ -520,7 +539,8 @@ setup_dir
 #sfs_OG $RESULT1/snps_IRGSP.tsv $RESULT2/snps_Omrdonls.tsv Omrdonls $RESULT2
 
 #GENERATE EST-SFS INPUT FILE: SAMPLE
-#count_allele $VCF_ALL $RESULT1 19k_samples
+#count_allele $VCF_ALL $RESULT1 2000 19k_samples_2000
+#count_allele $VCF_ALL $RESULT1 20000 19k_samples_20000
 #TRIM THE OG FILES (CAUSE SOME OF THE SITES WERE FILTERED OUT IN THE 19K FILE DUE TO EXCESSIVE MISSING DATA)
 
 #COMPILE
@@ -529,7 +549,16 @@ setup_dir
 #need to add this command to function later
 #awk -F'\t' 'NR==FNR { keep[$1":"$2]=1; next } ($1":"$2) in keep' \
 #    $RESULT1/allele_count.19k_samples.tsv $RESULT2/allele_count_Omrdonls.txt > $RESULT2/allele_count_filtered_Omrdonls.txt
+
+#Filter Barthii
+filter_og_to_focal $RESULT1/allele_count_19k_samples_2000.tsv $RESULT2/allele_count_Omrdonls.txt $RESULT4/allele_count_filtered_Omrdonls.txt
+filter_og_to_focal $RESULT1/allele_count_19k_samples_20000.tsv $RESULT2/allele_count_Omrdonls.txt $RESULT5/allele_count_filtered_Omrdonls.txt
+#Filter meridionalis
+filter_og_to_focal $RESULT1/allele_count_19k_samples_2000.tsv $RESULT1/allele_count_Obrth.txt $RESULT4/allele_count_filtered_Obrth.txt
+filter_og_to_focal $RESULT1/allele_count_19k_samples_20000.tsv $RESULT1/allele_count_Obrth.txt $RESULT5/allele_count_filtered_Obrth.txt
+#COMPILE
 #compile_est-sfs_inputs $RESULT1/allele_count.19k_samples.tsv $RESULT1/allele_count_filtered_Obrth.txt $RESULT2/allele_count_filtered_Omrdonls.txt $RESULT2
+compile_est-sfs_inputs $RESULT1/allele_count_19k_samples_20000.tsv $RESULT5/allele_count_filtered_Obrth.txt $RESULT5/allele_count_filtered_Omrdonls.txt $RESULT5
 
 #RUN EST-SFS
 #run_est_sfs $RESULT1/estsfs_data.chr1.tsv $R6 $RESULT1 chr1
@@ -538,15 +567,18 @@ setup_dir
 #run_est_sfs_chunked $RESULT2/est_sfs_input.tsv $R6 $RESULT2 rice_chr1-12_est-sfs 200000
 
 #EXTRACT AA
-#extract_ancestral_allele 0.95 0.85 $RESULT1/rice_chr1-12_est-sfs_pvalue_out_all.txt $RESULT1/allele_count_filtered_compiled.tsv $RESULT1 AA_Obrth-Oglmptl.tsv
-#extract_ancestral_allele 0.95 0.85 $RESULT2/rice_chr1-12_est-sfs_pvalue_out_all.txt $RESULT2/allele_count_filtered_compiled.tsv $RESULT2 AA_Obrth-mrdonls.tsv
+#extract_ancestral_allele 0.75 0.85 $RESULT1/rice_chr1-12_est-sfs_pvalue_out_all.txt $RESULT1/allele_count_filtered_compiled.tsv $RESULT1 AA_Obrth-Oglmptl.tsv
+#extract_ancestral_allele 0.75 0.85 $RESULT2/rice_chr1-12_est-sfs_pvalue_out_all.txt $RESULT2/allele_count_filtered_compiled.tsv $RESULT2 AA_Obrth-mrdonls.tsv
 
 #PLOT usfs
 #plot_uSFS $RESULT1/AA_Obrth-Oglmptl.tsv og_set1 $RESULT1
-plot_uSFS $RESULT2/AA_Obrth-mrdonls.tsv  og_set2 $RESULT2
+#plot_uSFS $RESULT2/AA_Obrth-mrdonls.tsv  og_set2 $RESULT2
 
 #PLOT DISAGREED AA
-./disagreement_genome_wide_density_plot.py $RESULT2/disagreed_aa.tsv disagreement_density_plot
+#./disagreement_genome_wide_density_plot.py $RESULT2/disagreed_aa.tsv disagreement_density_plot
+#./disagreement_genome_wide_density_plot.py $RESULT2/disagreed_aa.og2_eq_og3.tsv disagreed_aa.og2_eq_og3
+#./disagreement_genome_wide_density_plot.py $RESULT2/both_NA.tsv low_confid_density_plot
+#./disagreement_genome_wide_density_plot.py $RESULT2/glmptl-mrdonls-differ.tsv glmptl-mrdonls-differ
 
 }
 
